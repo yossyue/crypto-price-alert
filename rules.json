@@ -1,1 +1,17 @@
-{ "rules": [] }
+{
+  "rules": [
+    {
+      "id": "ed332948",
+      "symbol": "YAJUCoin",
+      "name": "淫夢 1145141919810 ",
+      "chainId": "solana",
+      "tokenAddress": "BRrc4qh3t1wpE97FETgea1DEefu8A95Cu3g9vcN5pump",
+      "type": "pct_up",
+      "value": 100,
+      "cooldownHours": 24,
+      "enabled": true,
+      "createdAt": "2026-10-10T19:06:22.449Z",
+      "basePrice": 0.0001183
+    }
+  ]
+}
