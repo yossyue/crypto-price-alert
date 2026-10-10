@@ -12,6 +12,18 @@
       "enabled": true,
       "createdAt": "2026-10-10T19:06:22.449Z",
       "basePrice": 0.0001183
+    },
+    {
+      "id": "e102dfb7",
+      "symbol": "114514",
+      "name": "114514",
+      "chainId": "solana",
+      "tokenAddress": "AGdGTQa8iRnSx4fQJehWo4Xwbh1bzTazs55R6Jwupump",
+      "type": "above",
+      "value": 0.0002,
+      "cooldownHours": 24,
+      "enabled": true,
+      "createdAt": "2026-10-10T21:09:58.652Z"
     }
   ]
 }
