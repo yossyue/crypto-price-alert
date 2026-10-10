@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>価格アラート</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#6b7480; --line:#e2e5ea; --accent:#2563eb; --ok:#16a34a; --bad:#dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1318; --card:#181d24; --fg:#e8ecf1; --muted:#8b95a3; --line:#2a313b; --accent:#5b8def; --ok:#4ade80; --bad:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,"Hiragino Sans",sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:8px 0 12px; }
+  nav { display:flex; gap:8px; margin-bottom:12px; }
+  nav button { flex:1; }
+  button, input, select { font:inherit; color:inherit; }
+  button { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; cursor:pointer; }
+  button.primary, nav button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  input, select { width:100%; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { min-width:0; }
+  .grow { flex:1; }
+  .muted { color:var(--muted); font-size:14px; }
+  .sym { font-weight:700; }
+  .price { font-variant-numeric:tabular-nums; }
+  .pick { display:block; width:100%; text-align:left; margin-bottom:8px; }
+  .msg { padding:10px 12px; border-radius:8px; margin-bottom:10px; background:var(--card); border:1px solid var(--line); }
+  .msg.err { border-color:var(--bad); color:var(--bad); }
+  .msg.ok { border-color:var(--ok); color:var(--ok); }
+  .hit { color:var(--ok); font-weight:700; }
+  label { display:block; font-size:14px; color:var(--muted); margin:10px 0 4px; }
+  details { margin-top:16px; }
+  summary { cursor:pointer; color:var(--muted); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🔔 価格アラート</h1>
+  <nav>
+    <button id="tab-add" class="on">登録</button>
+    <button id="tab-list">登録済み</button>
+  </nav>
+  <div id="msg" hidden></div>
+
+  <section id="view-add">
+    <div class="row">
+      <input id="q" class="grow" placeholder="銘柄名・シンボル・コントラクトアドレス" autocomplete="off">
+      <button id="search" class="primary">検索</button>
+    </div>
+    <div id="results" style="margin-top:12px"></div>
+    <div id="form" class="card" hidden>
+      <div id="picked"></div>
+      <label for="type">通知条件</label>
+      <select id="type">
+        <option value="above">価格が指定額以上になったら</option>
+        <option value="below">価格が指定額以下になったら</option>
+        <option value="pct_up">現在価格から +n% 上がったら</option>
+        <option value="pct_down">現在価格から -n% 下がったら</option>
+      </select>
+      <label for="value" id="value-label">価格 (USD)</label>
+      <input id="value" type="number" inputmode="decimal" step="any" min="0" placeholder="例: 0.00003">
+      <label for="cooldown">再通知までの休止時間</label>
+      <select id="cooldown">
+        <option value="1">1時間</option>
+        <option value="6">6時間</option>
+        <option value="24" selected>24時間</option>
+        <option value="168">7日</option>
+      </select>
+      <button id="register" class="primary" style="width:100%;margin-top:14px">この条件で登録</button>
+    </div>
+  </section>
+
+  <section id="view-list" hidden>
+    <div class="row" style="margin-bottom:10px">
+      <span class="muted grow" id="list-note"></span>
+      <button id="reload">更新</button>
+    </div>
+    <div id="rules"></div>
+  </section>
+
+  <details id="settings">
+    <summary>設定</summary>
+    <div class="card" style="margin-top:8px">
+      <label for="repo">リポジトリ (owner/repo)</label>
+      <input id="repo" value="yossyue/crypto-price-alert" autocapitalize="off" autocorrect="off">
+      <label for="token">GitHub トークン (登録・削除に必要)</label>
+      <input id="token" type="password" placeholder="github_pat_..." autocomplete="off">
+      <p class="muted">このリポジトリの Contents 読み書きだけを許可した細粒度トークンを使ってください。この端末のブラウザにのみ保存されます。</p>
+      <button id="save" class="primary">保存</button>
+    </div>
+  </details>
+</main>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const DEX = 'https://api.dexscreener.com';
+let picked = null;
+
+/* ---------- helpers ---------- */
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const kid of kids) e.append(kid);   // strings become text nodes, never HTML
+  return e;
+}
+function show(text, kind = '') {
+  const m = $('msg');
+  m.hidden = !text;
+  m.className = 'msg ' + kind;
+  m.textContent = text || '';
+}
+function fmt(p) {
+  p = Number(p);
+  if (!Number.isFinite(p)) return '-';
+  if (p >= 1) return '$' + p.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  const s = Number(p.toPrecision(4)).toString();
+  return '$' + (s.includes('e') ? p.toFixed(12).replace(/0+$/, '') : s);
+}
+function describe(r) {
+  switch (r.type) {
+    case 'above': return fmt(r.value) + ' 以上';
+    case 'below': return fmt(r.value) + ' 以下';
+    case 'pct_up': return `登録時(${fmt(r.basePrice)})から +${r.value}%`;
+    case 'pct_down': return `登録時(${fmt(r.basePrice)})から -${r.value}%`;
+  }
+  return '?';
+}
+function targetPrice(r) {
+  const v = Number(r.value), b = Number(r.basePrice);
+  if (r.type === 'above' || r.type === 'below') return v;
+  return r.type === 'pct_up' ? b * (1 + v / 100) : b * (1 - v / 100);
+}
+function isHit(r, price) {
+  const t = targetPrice(r);
+  return (r.type === 'above' || r.type === 'pct_up') ? price >= t : price <= t;
+}
+
+/* ---------- settings / GitHub API ---------- */
+function cfg() {
+  let repo = $('repo').value.trim(), token = $('token').value.trim();
+  return { repo, token };
+}
+function loadCfg() {
+  try {
+    $('repo').value = localStorage.getItem('cpa.repo') || $('repo').value;
+    $('token').value = localStorage.getItem('cpa.token') || '';
+  } catch {}
+}
+function ghHeaders(token) {
+  const h = { Accept: 'application/vnd.github+json' };
+  if (token) h.Authorization = 'Bearer ' + token;
+  return h;
+}
+const b64decode = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, '')), (c) => c.charCodeAt(0)));
+const b64encode = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+
+async function readRules() {
+  const { repo, token } = cfg();
+  const res = await fetch(`https://api.github.com/repos/${repo}/contents/rules.json`, { headers: ghHeaders(token), cache: 'no-store' });
+  if (!res.ok) throw new Error(`rules.json を読めません (${res.status})`);
+  const j = await res.json();
+  return { data: JSON.parse(b64decode(j.content)), sha: j.sha };
+}
+/** Read-modify-write with one retry when the file changed underneath us. */
+async function updateRules(mutate, message) {
+  const { repo, token } = cfg();
+  if (!token) throw new Error('設定でGitHubトークンを入力してください');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data, sha } = await readRules();
+    data.rules = data.rules || [];
+    mutate(data);
+    const res = await fetch(`https://api.github.com/repos/${repo}/contents/rules.json`, {
+      method: 'PUT',
+      headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, content: b64encode(JSON.stringify(data, null, 2) + '\n'), sha }),
+    });
+    if (res.ok) return;
+    if (res.status !== 409 && res.status !== 422) throw new Error(`保存に失敗しました (${res.status})`);
+  }
+  throw new Error('他の更新と衝突しました。もう一度お試しください');
+}
+
+/* ---------- search ---------- */
+async function search() {
+  const q = $('q').value.trim();
+  if (!q) return;
+  show('');
+  $('form').hidden = true;
+  const box = $('results');
+  box.replaceChildren(el('p', { class: 'muted' }, '検索中...'));
+  try {
+    const res = await fetch(`${DEX}/latest/dex/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error(`検索に失敗しました (${res.status})`);
+    const { pairs = [] } = await res.json();
+    // one entry per token (chain + base address): keep the most liquid pair
+    const best = new Map();
+    for (const p of pairs) {
+      if (!(Number(p.priceUsd) > 0)) continue;
+      const k = p.chainId + ':' + p.baseToken.address.toLowerCase();
+      if (!best.has(k) || (p.liquidity?.usd ?? 0) > (best.get(k).liquidity?.usd ?? 0)) best.set(k, p);
+    }
+    const list = [...best.values()].sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0)).slice(0, 15);
+    if (!list.length) { box.replaceChildren(el('p', { class: 'muted' }, '見つかりませんでした。コントラクトアドレスでも検索できます。')); return; }
+    box.replaceChildren(...list.map((p) => el('button', { class: 'pick', onclick: () => pick(p) },
+      el('div', {}, el('span', { class: 'sym' }, p.baseToken.symbol), ' ', el('span', { class: 'muted' }, p.baseToken.name)),
+      el('div', { class: 'muted' }, `${p.chainId} / ${fmt(p.priceUsd)} / 流動性 $${Math.round(p.liquidity?.usd ?? 0).toLocaleString('en-US')}`),
+    )));
+  } catch (e) {
+    box.replaceChildren();
+    show(e.message, 'err');
+  }
+}
+function pick(p) {
+  picked = p;
+  $('picked').replaceChildren(
+    el('div', {}, el('span', { class: 'sym' }, p.baseToken.symbol), ' ', el('span', { class: 'muted' }, `${p.chainId} / 現在 ${fmt(p.priceUsd)}`)),
+  );
+  $('form').hidden = false;
+  $('value').value = '';
+  syncLabel();
+  $('form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function syncLabel() {
+  const pct = $('type').value.startsWith('pct');
+  $('value-label').textContent = pct ? '変動率 (%)' : '価格 (USD)';
+  $('value').placeholder = pct ? '例: 20' : '例: 0.00003';
+}
+
+async function register() {
+  const value = Number($('value').value);
+  if (!picked || !(value > 0)) { show('条件の値を正の数で入力してください', 'err'); return; }
+  const type = $('type').value;
+  const rule = {
+    id: crypto.randomUUID().slice(0, 8),
+    symbol: picked.baseToken.symbol,
+    name: picked.baseToken.name,
+    chainId: picked.chainId,
+    tokenAddress: picked.baseToken.address,
+    type, value,
+    cooldownHours: Number($('cooldown').value),
+    enabled: true,
+    createdAt: new Date().toISOString(),
+  };
+  if (type.startsWith('pct')) rule.basePrice = Number(picked.priceUsd);
+  $('register').disabled = true;
+  try {
+    await updateRules((d) => d.rules.push(rule), `add rule: ${rule.symbol}`);
+    show(`${rule.symbol} を登録しました(${describe(rule)})`, 'ok');
+    $('form').hidden = true; $('results').replaceChildren(); picked = null;
+  } catch (e) { show(e.message, 'err'); }
+  $('register').disabled = false;
+}
+
+/* ---------- list ---------- */
+async function loadList() {
+  show('');
+  const box = $('rules');
+  box.replaceChildren(el('p', { class: 'muted' }, '読み込み中...'));
+  try {
+    const { data } = await readRules();
+    const rules = data.rules || [];
+    $('list-note').textContent = `${rules.length}件`;
+    if (!rules.length) { box.replaceChildren(el('p', { class: 'muted' }, 'まだ登録がありません')); return; }
+    box.replaceChildren(...rules.map((r) => card(r)));
+    // current prices, batched by chain (30 addresses per request)
+    const byChain = {};
+    for (const r of rules) (byChain[r.chainId] ||= new Set()).add(r.tokenAddress);
+    const pairs = {};
+    await Promise.all(Object.entries(byChain).map(async ([chain, set]) => {
+      const addrs = [...set];
+      for (let i = 0; i < addrs.length; i += 30) {
+        const res = await fetch(`${DEX}/tokens/v1/${encodeURIComponent(chain)}/${addrs.slice(i, i + 30).join(',')}`);
+        if (res.ok) (pairs[chain] ||= []).push(...await res.json());
+      }
+    }));
+    for (const r of rules) {
+      const cands = (pairs[r.chainId] || []).filter((p) => p.baseToken.address.toLowerCase() === r.tokenAddress.toLowerCase() && Number(p.priceUsd) > 0)
+        .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
+      const out = document.querySelector(`[data-now="${CSS.escape(r.id)}"]`);
+      if (!out) continue;
+      if (!cands.length) { out.textContent = '価格取得不可'; continue; }
+      const price = Number(cands[0].priceUsd);
+      out.textContent = `現在 ${fmt(price)}`;
+      if (r.enabled !== false && isHit(r, price)) out.classList.add('hit');
+    }
+  } catch (e) { box.replaceChildren(); show(e.message, 'err'); }
+}
+function card(r) {
+  const off = r.enabled === false;
+  return el('div', { class: 'card' },
+    el('div', { class: 'row' },
+      el('div', { class: 'grow' },
+        el('div', {}, el('span', { class: 'sym' }, r.symbol), ' ', el('span', { class: 'muted' }, r.chainId + (off ? ' ・停止中' : ''))),
+        el('div', {}, describe(r)),
+        el('div', { class: 'muted price', 'data-now': r.id }, '価格取得中...'),
+      ),
+      el('button', { onclick: () => toggle(r) }, off ? '再開' : '停止'),
+      el('button', { class: 'danger', onclick: () => remove(r) }, '削除'),
+    ),
+  );
+}
+async function toggle(r) {
+  try { await updateRules((d) => { const x = d.rules.find((y) => y.id === r.id); if (x) x.enabled = r.enabled === false; }, `toggle rule: ${r.symbol}`); await loadList(); }
+  catch (e) { show(e.message, 'err'); }
+}
+async function remove(r) {
+  if (!confirm(`${r.symbol} の通知を削除しますか?`)) return;
+  try { await updateRules((d) => { d.rules = d.rules.filter((y) => y.id !== r.id); }, `remove rule: ${r.symbol}`); await loadList(); }
+  catch (e) { show(e.message, 'err'); }
+}
+
+/* ---------- wiring ---------- */
+function tab(name) {
+  $('view-add').hidden = name !== 'add';
+  $('view-list').hidden = name !== 'list';
+  $('tab-add').classList.toggle('on', name === 'add');
+  $('tab-list').classList.toggle('on', name === 'list');
+  show('');
+  if (name === 'list') loadList();
+}
+$('tab-add').onclick = () => tab('add');
+$('tab-list').onclick = () => tab('list');
+$('search').onclick = search;
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
+$('type').onchange = syncLabel;
+$('register').onclick = register;
+$('reload').onclick = loadList;
+$('save').onclick = () => {
+  try { localStorage.setItem('cpa.repo', $('repo').value.trim()); localStorage.setItem('cpa.token', $('token').value.trim()); } catch {}
+  show('設定を保存しました', 'ok');
+};
+loadCfg();
+if (!$('token').value) $('settings').open = true;
+</script>
+</body>
+</html>
