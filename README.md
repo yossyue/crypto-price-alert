@@ -25,8 +25,8 @@
 2. **Secrets**: Settings → Secrets and variables → Actions → New repository secret
    - 名前 `NTFY_TOPIC` / 値: 上のトピック名
 3. **Actions の権限**: Settings → Actions → General → Workflow permissions を **Read and write permissions** にする。
-4. **GitHub Pages**: Settings → Pages → Source を `Deploy from branch`、Branch を `main` / `/docs` にする。
-5. **トークン**: Settings → Developer settings → Fine-grained tokens で、このリポジトリのみ・Contents の Read and write を許可したものを作成し、Web画面の「設定」に入力する。
+4. **トークン**: Settings → Developer settings → Fine-grained tokens で、このリポジトリのみ・Contents の Read and write を許可したものを作成し、Web画面の「設定」に入力する。
+5. **GitHub Pages**(`docs/` が `main` に入ってから設定する): Settings → Pages → Source を `Deploy from branch`、Branch を `main` / `/docs` にする。
 6. 動作確認: Actions タブ → monitor → Run workflow。
 
 > このリポジトリは公開です。`rules.json` の銘柄・目標価格は誰でも見られます。ntfy のトピック名とトークンは **絶対にコミットしないでください**(Secrets と手元のブラウザだけに置く)。
