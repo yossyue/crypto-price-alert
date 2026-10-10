@@ -1,0 +1,12 @@
+{
+  "name": "crypto-price-alert",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Price alerts for crypto tokens (incl. meme coins) pushed to your phone via ntfy",
+  "scripts": {
+    "monitor": "node src/monitor.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": { "node": ">=20" }
+}
