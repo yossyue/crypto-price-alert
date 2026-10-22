@@ -32,6 +32,8 @@ export function isTriggered(rule, price) {
 /** True when the rule fired recently and must stay quiet. */
 export function inCooldown(rule, lastNotifiedIso, now = Date.now()) {
   if (!lastNotifiedIso) return false;
+  // a condition edited after the last alert is a new question: don't suppress it
+  if (rule.updatedAt && Date.parse(rule.updatedAt) > Date.parse(lastNotifiedIso)) return false;
   const hours = Number(rule.cooldownHours ?? DEFAULT_COOLDOWN_HOURS);
   return now - Date.parse(lastNotifiedIso) < hours * 3600 * 1000;
 }
