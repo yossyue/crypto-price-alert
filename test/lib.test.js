@@ -30,6 +30,14 @@ test('cooldown', () => {
   assert.ok(!inCooldown({ cooldownHours: 1 }, '2026-01-01T12:00:00Z', now));
 });
 
+test('editing a rule after its last alert lifts the cooldown', () => {
+  const now = Date.parse('2026-01-02T00:00:00Z');
+  const last = '2026-01-01T23:00:00Z'; // 1h ago: normally still quiet
+  assert.ok(inCooldown({}, last, now));
+  assert.ok(!inCooldown({ updatedAt: '2026-01-01T23:30:00Z' }, last, now));
+  assert.ok(inCooldown({ updatedAt: '2026-01-01T22:00:00Z' }, last, now)); // edited before the alert
+});
+
 test('pickPair chooses most liquid matching pair', () => {
   const pairs = [
     { baseToken: { address: 'AAA' }, priceUsd: '1', liquidity: { usd: 10 } },

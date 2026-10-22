@@ -102,6 +102,7 @@
 const $ = (id) => document.getElementById(id);
 const DEX = 'https://api.dexscreener.com';
 let picked = null;
+const nowPrice = {};   // rule id -> latest price, filled by loadList
 
 /* ---------- helpers ---------- */
 function el(tag, props = {}, ...kids) {
@@ -295,6 +296,7 @@ async function loadList() {
       if (!out) continue;
       if (!cands.length) { out.textContent = '価格取得不可'; continue; }
       const price = Number(cands[0].priceUsd);
+      nowPrice[r.id] = price;
       out.textContent = `現在 ${fmt(price)}`;
       if (r.enabled !== false && isHit(r, price)) out.classList.add('hit');
     }
@@ -302,17 +304,75 @@ async function loadList() {
 }
 function card(r) {
   const off = r.enabled === false;
-  return el('div', { class: 'card' },
-    el('div', { class: 'row' },
-      el('div', { class: 'grow' },
-        el('div', {}, el('span', { class: 'sym' }, r.symbol), ' ', el('span', { class: 'muted' }, r.chainId + (off ? ' ・停止中' : ''))),
-        el('div', {}, describe(r)),
-        el('div', { class: 'muted price', 'data-now': r.id }, '価格取得中...'),
-      ),
-      el('button', { onclick: () => toggle(r) }, off ? '再開' : '停止'),
-      el('button', { class: 'danger', onclick: () => remove(r) }, '削除'),
+  const c = el('div', { class: 'card' });
+  c.append(el('div', { class: 'row' },
+    el('div', { class: 'grow' },
+      el('div', {}, el('span', { class: 'sym' }, r.symbol), ' ', el('span', { class: 'muted' }, r.chainId + (off ? ' ・停止中' : ''))),
+      el('div', {}, describe(r)),
+      el('div', { class: 'muted price', 'data-now': r.id }, '価格取得中...'),
     ),
+    el('button', { onclick: () => edit(r, c) }, '変更'),
+    el('button', { onclick: () => toggle(r) }, off ? '再開' : '停止'),
+    el('button', { class: 'danger', onclick: () => remove(r) }, '削除'),
+  ));
+  return c;
+}
+const TYPE_LABELS = [
+  ['above', '価格が指定額以上になったら'],
+  ['below', '価格が指定額以下になったら'],
+  ['pct_up', '基準価格から +n% 上がったら'],
+  ['pct_down', '基準価格から -n% 下がったら'],
+];
+const COOLDOWNS = [[1, '1時間'], [6, '6時間'], [24, '24時間'], [168, '7日']];
+function edit(r, c) {
+  const opt = (v, t, on) => { const o = el('option', { value: String(v) }, t); o.selected = on; return o; };
+  const type = el('select', {}, ...TYPE_LABELS.map(([v, t]) => opt(v, t, v === r.type)));
+  const value = el('input', { type: 'number', inputmode: 'decimal', step: 'any', min: '0' });
+  value.value = r.value;
+  const cdList = COOLDOWNS.some(([h]) => h === Number(r.cooldownHours ?? 24)) ? COOLDOWNS : [...COOLDOWNS, [Number(r.cooldownHours), `${r.cooldownHours}時間`]];
+  const cooldown = el('select', {}, ...cdList.map(([h, t]) => opt(h, t, h === Number(r.cooldownHours ?? 24))));
+  const reset = el('input', { type: 'checkbox', style: 'width:auto' });
+  const resetRow = el('label', { style: 'display:flex;gap:8px;align-items:center' }, reset, '基準価格を今の価格にリセットする');
+  const note = el('div', { class: 'muted' });
+  const sync = () => {
+    const pct = type.value.startsWith('pct');
+    valueLabel.textContent = pct ? '変動率 (%)' : '価格 (USD)';
+    resetRow.hidden = !pct;
+    note.textContent = pct && Number(r.basePrice) > 0 ? `現在の基準価格: ${fmt(r.basePrice)}` : '';
+  };
+  const valueLabel = el('label', {}, '');
+  type.onchange = sync;
+  const save = el('button', { class: 'primary grow' }, '保存');
+  save.onclick = async () => { save.disabled = true; await saveEdit(r, { type, value, cooldown, reset }); save.disabled = false; };
+  c.replaceChildren(
+    el('div', {}, el('span', { class: 'sym' }, r.symbol), ' ', el('span', { class: 'muted' }, r.chainId + ' / 条件を変更')),
+    el('label', {}, '通知条件'), type, valueLabel, value, note, resetRow,
+    el('label', {}, '再通知までの休止時間'), cooldown,
+    el('div', { class: 'row', style: 'margin-top:12px' }, save, el('button', { onclick: loadList }, 'キャンセル')),
   );
+  sync();
+}
+async function saveEdit(r, f) {
+  const value = Number(f.value.value);
+  if (!(value > 0)) { show('条件の値を正の数で入力してください', 'err'); return; }
+  const type = f.type.value, pct = type.startsWith('pct');
+  let basePrice = Number(r.basePrice);
+  // a %-rule needs a base: take today's price when switching into %-mode, when it is missing, or when asked
+  if (pct && (!(basePrice > 0) || !r.type.startsWith('pct') || f.reset.checked)) {
+    basePrice = nowPrice[r.id];
+    if (!(basePrice > 0)) { show('現在価格を取得できないため、基準価格を設定できません。時間をおいて再度お試しください', 'err'); return; }
+  }
+  try {
+    await updateRules((d) => {
+      const x = d.rules.find((y) => y.id === r.id);
+      if (!x) throw new Error('この銘柄はすでに削除されています');
+      x.type = type; x.value = value; x.cooldownHours = Number(f.cooldown.value);
+      if (pct) x.basePrice = basePrice; else delete x.basePrice;
+      x.updatedAt = new Date().toISOString();   // lets the monitor alert under the new condition even during a cooldown
+    }, `edit rule: ${r.symbol}`);
+    await loadList();
+    show(`${r.symbol} の条件を変更しました`, 'ok');
+  } catch (e) { show(e.message, 'err'); }
 }
 async function toggle(r) {
   try { await updateRules((d) => { const x = d.rules.find((y) => y.id === r.id); if (x) x.enabled = r.enabled === false; }, `toggle rule: ${r.symbol}`); await loadList(); }
